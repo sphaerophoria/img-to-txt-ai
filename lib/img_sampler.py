@@ -112,7 +112,7 @@ def get_labels_for_samples(
     # (n, sum)
     summed = samples_for_comparison.sum(dim=(1, 2))
     # (n, label)
-    labels = (summed / (255 * h * w + 1) * c).to(torch.int64)
+    labels = (summed / (h * w + 1) * c).to(torch.int64)
     return labels
 
 
@@ -122,7 +122,7 @@ class ImgSampler:
         self.sample_height = h
         self.glyph_renderer = glyph_renderer
         img_pil = Image.open(img_path).convert(mode="L")
-        self.img = torch.tensor(numpy.array(img_pil))
+        self.img = torch.tensor(numpy.array(img_pil)) / 255.0
 
         img_for_comparison = img_pil.resize(
             (
@@ -134,7 +134,7 @@ class ImgSampler:
                 ),
             )
         )
-        self.img_for_comparison = torch.tensor(numpy.array(img_for_comparison))
+        self.img_for_comparison = torch.tensor(numpy.array(img_for_comparison)) / 255.0
         self.glyph_cache = generate_glyph_cache(self.glyph_renderer)
         self.char_width = int(glyph_renderer.char_width())
         self.char_height = int(glyph_renderer.row_height())
