@@ -19,6 +19,7 @@ import torch.optim as optim
 def parse_args():
     parser = ArgumentParser()
     parser.add_argument("--image-path", required=True)
+    parser.add_argument("--device", default="cpu")
     return parser.parse_args()
 
 
@@ -70,12 +71,12 @@ def render_full_image(img, renderer, sample_width, sample_height, iter, net):
     Image.fromarray(output_img).save("{}.png".format(iter))
 
 
-def main(image_path):
+def main(image_path, device):
     renderer = GlyphRenderer()
     sample_width = 12
     sample_height = int(sample_width / renderer.char_aspect())
-    net = Network(sample_width * sample_height, len(CHAR_LOOKUP))
-    sampler = ImgSampler(sample_width, sample_height, renderer, image_path)
+    net = Network(sample_width * sample_height, len(CHAR_LOOKUP)).to(device)
+    sampler = ImgSampler(sample_width, sample_height, renderer, image_path, device)
 
     optimizer = optim.Adam(net.parameters(), lr=0.001)
     criterion = nn.CrossEntropyLoss()

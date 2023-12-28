@@ -75,18 +75,20 @@ def get_samples_and_labels_for_img(
     return data, labels
 
 
-def generate_glyph_cache(glyph_renderer: GlyphRenderer) -> torch.Tensor:
+def generate_glyph_cache(glyph_renderer: GlyphRenderer, device="cpu") -> torch.Tensor:
     """
     returns tensor of shape (c, h, w) where c is the number of glyphs, h is height, and w is width of the generated bitmaps
     """
     char_height = int(glyph_renderer.row_height())
     char_width = int(glyph_renderer.char_width())
-    item_tensor = torch.zeros((len(CHAR_LOOKUP), char_height, char_width))
+    item_tensor = torch.zeros(
+        (len(CHAR_LOOKUP), char_height, char_width), device=device
+    )
     for idx, char in enumerate(CHAR_LOOKUP):
         item = glyph_renderer.render_char(char)
         item_tensor[
             idx, 0 : item.bitmap.shape[0], 0 : item.bitmap.shape[1]
-        ] = torch.tensor(item.bitmap)
+        ] = torch.tensor(item.bitmap, device=device)
 
     return item_tensor
 
@@ -117,12 +119,12 @@ def get_labels_for_samples(
 
 
 class ImgSampler:
-    def __init__(self, w, h, glyph_renderer, img_path):
+    def __init__(self, w, h, glyph_renderer, img_path, device="cpu"):
         self.sample_width = w
         self.sample_height = h
         self.glyph_renderer = glyph_renderer
         img_pil = Image.open(img_path).convert(mode="L")
-        self.img = torch.tensor(numpy.array(img_pil)) / 255.0
+        self.img = torch.tensor(numpy.array(img_pil), device=device) / 255.0
 
         img_for_comparison = img_pil.resize(
             (
@@ -134,8 +136,10 @@ class ImgSampler:
                 ),
             )
         )
-        self.img_for_comparison = torch.tensor(numpy.array(img_for_comparison)) / 255.0
-        self.glyph_cache = generate_glyph_cache(self.glyph_renderer)
+        self.img_for_comparison = (
+            torch.tensor(numpy.array(img_for_comparison), device=device) / 255.0
+        )
+        self.glyph_cache = generate_glyph_cache(self.glyph_renderer, device)
         self.char_width = int(glyph_renderer.char_width())
         self.char_height = int(glyph_renderer.row_height())
         self.glyph_renderer = glyph_renderer
