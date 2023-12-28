@@ -44,7 +44,7 @@ class GlyphRenderer:
             self.face.load_char(char)
             bitmap = self.face.glyph.bitmap
             # FIXME: Sometimes this might not be an error?
-            if len(bitmap.buffer) == 0:
+            if len(bitmap.buffer) == 0 or self.face.glyph.advance.x == 0:
                 raise RuntimeError("Cannot render")
 
             if bitmap.pixel_mode != freetype.FT_PIXEL_MODE_GRAY:

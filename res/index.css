@@ -1,0 +1,48 @@
+:root {
+  --img-comp-width: 800px;
+}
+
+.sample_view {
+  display: inline-block;
+  background: red;
+  opacity: 50%;
+  pointer-events: none;
+}
+
+.glyph-card {
+  background: grey;
+  border-radius: 5px;
+  padding: 5px;
+  margin: 5px;
+}
+
+.glyph-card img {
+  width: 50px;
+  display: block;
+  margin: auto;
+}
+
+.glyph-card * {
+  margin: 0;
+  text-align: center;
+}
+
+.glyph-container {
+  display: flex;
+  flex-wrap: wrap;
+  width: calc(var(--img-comp-width) * 2);
+}
+
+#input-img {
+  width: var(--img-comp-width);
+}
+
+#full-img-comp {
+  display: flex;
+}
+
+#full-img-comp > * {
+  align-self: center;
+  width: var(--img-comp-width);
+  margin: 5px;
+}

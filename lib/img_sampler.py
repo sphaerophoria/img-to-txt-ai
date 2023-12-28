@@ -47,6 +47,22 @@ def extract_w_h_samples(
     return samples
 
 
+def sample_to_sample_for_comparison(x, y, sample, img, img_for_comparison):
+    img_for_comparison_x = int(img_for_comparison.shape[1] / img.shape[1] * x)
+    img_for_comparison_y = int(img_for_comparison.shape[0] / img.shape[0] * y)
+    img_for_comparison_width = int(
+        img_for_comparison.shape[1] / img.shape[1] * sample.shape[1]
+    )
+    img_for_comparison_height = int(
+        img_for_comparison.shape[0] / img.shape[0] * sample.shape[0]
+    )
+
+    return img_for_comparison[
+        img_for_comparison_y : img_for_comparison_y + img_for_comparison_height,
+        img_for_comparison_x : img_for_comparison_x + img_for_comparison_width,
+    ]
+
+
 def get_samples_and_labels_for_img(
     sample_width: int,
     sample_height: int,
@@ -204,6 +220,30 @@ def generate_glyph_cache(glyph_renderer: GlyphRenderer, device="cpu") -> torch.T
     return item_tensor / 255.0
 
 
+def get_glyph_scores_for_samples(
+    samples_for_comparison: torch.Tensor, glyph_cache: torch.Tensor
+) -> torch.Tensor:
+    """
+    Where n = number of samples
+          c = number of possible characters
+          h = height
+          w = width
+          s = score
+
+    Returns (n, c, s)
+    samples_for_comparison: tensor of (n, h, w)
+    glyph_cache: tensor of (c, h, w)
+    """
+
+    n = samples_for_comparison.shape[0]
+    c = glyph_cache.shape[0]
+
+    sample_sums = samples_for_comparison.sum(dim=(1, 2))
+    sample_sums = sample_sums.reshape((n, 1)).repeat((1, c))
+    glyph_sums = glyph_cache.sum(dim=(1, 2))
+    return (sample_sums - glyph_sums).abs()
+
+
 def get_labels_for_samples(
     samples_for_comparison: torch.Tensor, glyph_cache: torch.Tensor
 ) -> torch.Tensor:
@@ -218,13 +258,20 @@ def get_labels_for_samples(
     glyph_cache: tensor of (c, h, w)
     """
 
-    n = samples_for_comparison.shape[0]
-    c = glyph_cache.shape[0]
+    labels = torch.zeros(
+        samples_for_comparison.shape[0],
+        device=samples_for_comparison.device,
+        dtype=torch.int64,
+    )
 
-    sample_sums = samples_for_comparison.sum(dim=(1, 2))
-    sample_sums = sample_sums.reshape((n, 1)).repeat((1, c))
-    glyph_sums = glyph_cache.sum(dim=(1, 2))
-    labels = (sample_sums - glyph_sums).abs().min(dim=1)[1]
+    # Batch the score calculation to avoid OOMing
+    BATCH_SIZE = 100
+    for i in range(0, labels.shape[0], BATCH_SIZE):
+        scores = get_glyph_scores_for_samples(
+            samples_for_comparison[i : i + BATCH_SIZE], glyph_cache
+        )
+        labels[i : i + BATCH_SIZE] = scores.min(dim=1)[1]
+
     return labels
 
 

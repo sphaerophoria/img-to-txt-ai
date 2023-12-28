@@ -10,6 +10,14 @@ pkgs.mkShell {
     nodePackages.pyright
     ruff
     black
+    python3
+    nodePackages.vscode-langservers-extracted
+    nodePackages.prettier
+    htmlhint
+    nodePackages.eslint
+    stylelint
   ];
+
+  NODE_PATH = "${pkgs.nodePackages.eslint}/lib/node_modules";
 }
 
