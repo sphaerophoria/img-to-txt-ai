@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from lib.img_to_text import GlyphRenderer, CHAR_LOOKUP
+from lib.img_to_text import GlyphRenderer
 from lib.img_sampler import (
     ImgSampler,
     num_samples_for_img,
@@ -32,51 +32,43 @@ class Network(nn.Module):
         return self.linear1(x)
 
 
-def render_full_image(img, renderer, sample_width, sample_height, iter, net):
-    output_img = numpy.zeros(
-        (
-            int(img.shape[0] / sample_height * renderer.row_height()),
-            int(
-                img.shape[1]
-                / sample_width
-                * renderer.row_height()
-                * renderer.char_aspect()
-            ),
-        ),
-        dtype=numpy.uint8,
-    )
-
-    cursor_y = 0
-    cursor_x = 0
-
+def render_full_image(img, glyph_cache, sample_width, sample_height, iter, net):
     data = extract_w_h_samples(sample_width, sample_height, img)
     predictions = net(
         data.reshape((data.shape[0], sample_width * sample_height)).to(torch.float32)
     )
     num_y_samples, num_x_samples = num_samples_for_img(img, sample_width, sample_height)
+    output_img = numpy.zeros(
+        (
+            num_y_samples * glyph_cache.shape[1],
+            num_x_samples * glyph_cache.shape[2],
+        ),
+        dtype=numpy.uint8,
+    )
+
     char_idxs = torch.max(predictions, 1)[1]
     for y in range(num_y_samples):
+        output_y_start = y * glyph_cache.shape[1]
+        output_y_end = output_y_start + glyph_cache.shape[1]
         for x in range(num_x_samples):
             char_idx = char_idxs[y * num_x_samples + x]
 
-            rendered = renderer.render_char(CHAR_LOOKUP[char_idx])
-            output_y_end = cursor_y + rendered.bitmap.shape[0]
-            output_x_end = cursor_x + rendered.bitmap.shape[1]
-            output_img[cursor_y:output_y_end, cursor_x:output_x_end] = rendered.bitmap
-            cursor_x += int(rendered.advance)
+            rendered = glyph_cache[char_idx]
+            output_x_start = x * glyph_cache.shape[2]
+            output_x_end = output_x_start + glyph_cache.shape[2]
+            output_img[
+                output_y_start:output_y_end, output_x_start:output_x_end
+            ] = rendered.cpu().numpy()
 
-        cursor_x = 0
-        cursor_y += int(renderer.row_height())
-
-    Image.fromarray(output_img).save("{}.png".format(iter))
+    Image.fromarray(output_img * 255.0).convert(mode="L").save("{}.png".format(iter))
 
 
 def main(image_path, device):
     renderer = GlyphRenderer()
     sample_width = 12
     sample_height = int(sample_width / renderer.char_aspect())
-    net = Network(sample_width * sample_height, len(CHAR_LOOKUP)).to(device)
     sampler = ImgSampler(sample_width, sample_height, renderer, image_path, device)
+    net = Network(sample_width * sample_height, sampler.glyph_cache.shape[0]).to(device)
 
     optimizer = optim.Adam(net.parameters(), lr=0.001)
     criterion = nn.CrossEntropyLoss()
@@ -95,7 +87,7 @@ def main(image_path, device):
         if i % 1000 == 1:
             print("loss", loss)
             render_full_image(
-                sampler.img, renderer, sample_width, sample_height, i, net
+                sampler.img, sampler.glyph_cache, sample_width, sample_height, i, net
             )
 
 

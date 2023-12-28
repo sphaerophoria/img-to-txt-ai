@@ -8,8 +8,6 @@ from argparse import ArgumentParser
 
 SAMPLE_WIDTH = 12
 
-CHAR_LOOKUP = [" ", ".", ":", "a", "@"]
-
 
 def parse_args():
     parser = ArgumentParser()
@@ -20,6 +18,8 @@ def parse_args():
 @dataclass
 class CachedGlyph:
     bitmap: numpy.ndarray
+    x_bearing: float
+    y_bearing: float
     advance: float
 
 
@@ -27,13 +27,25 @@ class GlyphRenderer:
     def __init__(self):
         self.glyph_cache = {}
         self.face = freetype.Face("Hack-Regular.ttf")
-        self.face.set_char_size(48 * 64)
+        self.face.set_char_size(24 * 64)
+
+        char_code, index = self.face.get_first_char()
+        while index != 0:
+            try:
+                self.render_char(char_code)
+            except RuntimeError:
+                print("Failed to render", char_code)
+
+            char_code, index = self.face.get_next_char(char_code, index)
 
     def render_char(self, char):
         cached = self.glyph_cache.get(char, None)
         if cached is None:
             self.face.load_char(char)
             bitmap = self.face.glyph.bitmap
+            # FIXME: Sometimes this might not be an error?
+            if len(bitmap.buffer) == 0:
+                raise RuntimeError("Cannot render")
 
             if bitmap.pixel_mode != freetype.FT_PIXEL_MODE_GRAY:
                 raise RuntimeError("Unsupported pixel mode")
@@ -45,6 +57,8 @@ class GlyphRenderer:
                 bitmap=numpy.array(bitmap.buffer, dtype=numpy.uint8).reshape(
                     (bitmap.rows, bitmap.width)
                 ),
+                x_bearing=self.face.glyph.metrics.horiBearingX / 64.0,
+                y_bearing=self.face.glyph.metrics.horiBearingY / 64.0,
                 advance=self.face.glyph.advance.x / 64.0,
             )
 

@@ -2,9 +2,10 @@ import math
 import numpy
 import torch
 
-from lib.img_to_text import GlyphRenderer, CHAR_LOOKUP
+from lib.img_to_text import GlyphRenderer, CachedGlyph
 from PIL import Image
 from typing import Tuple
+from dataclasses import dataclass
 
 
 def num_samples_for_img(
@@ -75,6 +76,94 @@ def get_samples_and_labels_for_img(
     return data, labels
 
 
+@dataclass
+class Point:
+    x: int
+    y: int
+
+
+@dataclass
+class IndexMapping:
+    source_start: Point
+    source_end: Point
+    dest_start: Point
+    dest_end: Point
+
+
+def get_index_mapping_for_glyph(
+    item: CachedGlyph, dest_height: int, dest_width: int
+) -> IndexMapping:
+    """
+    Find a mapping from bitmap[y1:y2, x1:x2] into dest[y3:y4, x3:x4] that...
+    * Positions the glyph into the appropriate spot in dest
+    * Ensures that we do not try to write outside of dest
+    * Ensures that x2-x1 == x3-x4 (and the same for y)
+    """
+    source_height = item.bitmap.shape[0]
+    source_width = item.bitmap.shape[1]
+
+    # Destination is offset by the bearing
+    dest_start_x = int(item.x_bearing)
+
+    # Y bearing is from the baseline to the top of the image, which means it's
+    # inverted from the top left
+    # We also have to set the baseline as somewhere towards the middle of the
+    # output as tails of characters can drift below the basleline
+
+    # FIXME: hardcoded baseline is a problem, if the font size changes the
+    # baseline offset needs to change as well
+    BASELINE = 4
+    dest_start_y = int(dest_height - item.y_bearing - BASELINE)
+
+    # Assuming no clipping, the end destination should completely be a function
+    # of the dest start + source width
+    dest_end_x = dest_start_x + source_width
+    dest_end_y = dest_start_y + source_height
+
+    source_start_x = 0
+    source_start_y = 0
+    source_end_x = source_width
+    source_end_y = source_height
+
+    # Clamp the destination to be in [0, width]/[0, height], and adjust the
+    # source mappings to follow
+    if dest_start_x < 0:
+        source_start_x += -dest_start_x
+        dest_start_x = 0
+
+    if dest_start_y < 0:
+        source_start_y += -dest_start_y
+        dest_start_y = 0
+
+    if dest_end_x < 0:
+        source_end_x += -dest_end_x
+        dest_end_x = 0
+
+    if dest_end_y < 0:
+        source_end_y += -dest_end_y
+        dest_end_y = 0
+
+    if dest_end_x > dest_width:
+        source_end_x -= dest_end_x - dest_width
+        dest_end_x = dest_width
+
+    if dest_end_y > dest_height:
+        source_end_y -= dest_end_y - dest_height
+        dest_end_y = dest_height
+
+    source_start = Point(x=source_start_x, y=source_start_y)
+    source_end = Point(x=source_end_x, y=source_end_y)
+    dest_start = Point(x=dest_start_x, y=dest_start_y)
+    dest_end = Point(x=dest_end_x, y=dest_end_y)
+
+    return IndexMapping(
+        source_start=source_start,
+        source_end=source_end,
+        dest_start=dest_start,
+        dest_end=dest_end,
+    )
+
+
 def generate_glyph_cache(glyph_renderer: GlyphRenderer, device="cpu") -> torch.Tensor:
     """
     returns tensor of shape (c, h, w) where c is the number of glyphs, h is height, and w is width of the generated bitmaps
@@ -82,15 +171,37 @@ def generate_glyph_cache(glyph_renderer: GlyphRenderer, device="cpu") -> torch.T
     char_height = int(glyph_renderer.row_height())
     char_width = int(glyph_renderer.char_width())
     item_tensor = torch.zeros(
-        (len(CHAR_LOOKUP), char_height, char_width), device=device
+        (len(glyph_renderer.glyph_cache), char_height, char_width), device=device
     )
-    for idx, char in enumerate(CHAR_LOOKUP):
-        item = glyph_renderer.render_char(char)
-        item_tensor[
-            idx, 0 : item.bitmap.shape[0], 0 : item.bitmap.shape[1]
-        ] = torch.tensor(item.bitmap, device=device)
 
-    return item_tensor
+    for idx, char in enumerate(glyph_renderer.glyph_cache):
+        try:
+            item = glyph_renderer.render_char(char)
+            # FIXME: if character is too big, we need to handle that more gracefully
+            index_mapping = get_index_mapping_for_glyph(
+                item, item_tensor.shape[1], item_tensor.shape[2]
+            )
+
+            if index_mapping.dest_end.x == 0 or index_mapping.dest_end.y == 0:
+                print("{} has 0 sized glyph after index mapping".format(chr(char)))
+
+            item_tensor[
+                idx,
+                index_mapping.dest_start.y : index_mapping.dest_end.y,
+                index_mapping.dest_start.x : index_mapping.dest_end.x,
+            ] = torch.tensor(
+                item.bitmap[
+                    index_mapping.source_start.y : index_mapping.source_end.y,
+                    index_mapping.source_start.x : index_mapping.source_end.x,
+                ],
+                device=device,
+            )
+        except Exception as e:
+            print("failure to cache glyph: {}".format(e))
+            pass
+
+    # Normalize for sane comparison with sample images
+    return item_tensor / 255.0
 
 
 def get_labels_for_samples(
@@ -107,14 +218,13 @@ def get_labels_for_samples(
     glyph_cache: tensor of (c, h, w)
     """
 
+    n = samples_for_comparison.shape[0]
     c = glyph_cache.shape[0]
-    h = glyph_cache.shape[1]
-    w = glyph_cache.shape[2]
 
-    # (n, sum)
-    summed = samples_for_comparison.sum(dim=(1, 2))
-    # (n, label)
-    labels = (summed / (h * w + 1) * c).to(torch.int64)
+    sample_sums = samples_for_comparison.sum(dim=(1, 2))
+    sample_sums = sample_sums.reshape((n, 1)).repeat((1, c))
+    glyph_sums = glyph_cache.sum(dim=(1, 2))
+    labels = (sample_sums - glyph_sums).abs().min(dim=1)[1]
     return labels
 
 

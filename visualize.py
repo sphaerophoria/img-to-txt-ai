@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from argparse import ArgumentParser
-from lib.img_to_text import GlyphRenderer, CHAR_LOOKUP
+from lib.img_to_text import GlyphRenderer
 from lib.img_sampler import (
     ImgSampler,
     get_samples_and_labels_for_img,
@@ -36,23 +36,26 @@ def main(image_path, sample_width, output_path):
         sampler.img_for_comparison,
         sampler.glyph_cache,
     )
+    sample_height_comparison = sampler.img_for_comparison.shape[0] / num_y_samples
+    sample_width_comparison = sampler.img_for_comparison.shape[1] / num_x_samples
 
-    output_img = torch.zeros_like(sampler.img)
+    output_img = torch.zeros_like(sampler.img_for_comparison)
 
+    char_lookup = [chr(x) for x in renderer.glyph_cache.keys() if isinstance(x, int)]
     for y in range(num_y_samples):
         for x in range(num_x_samples):
             label = labels[y * num_x_samples + x]
-            output_y_start = y * sample_height
-            output_y_end = output_y_start + sample_height
-            output_x_start = x * sample_width
-            output_x_end = output_x_start + sample_width
-            output_img[output_y_start:output_y_end, output_x_start:output_x_end] = data[
-                y * num_x_samples + x
-            ]
-            print(CHAR_LOOKUP[label], end="")
+            output_y_start = int(y * sample_height_comparison)
+            output_y_end = int(output_y_start + sample_height_comparison)
+            output_x_start = int(x * sample_width_comparison)
+            output_x_end = int(output_x_start + sample_width_comparison)
+            output_img[
+                output_y_start:output_y_end, output_x_start:output_x_end
+            ] = sampler.glyph_cache[label]
+            print(char_lookup[label], end="")
         print()
 
-    Image.fromarray(output_img.numpy()).save(output_path)
+    Image.fromarray(output_img.numpy() * 255.0).convert(mode="L").save(output_path)
 
 
 if __name__ == "__main__":
