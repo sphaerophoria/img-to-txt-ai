@@ -6,6 +6,7 @@ from lib.img_to_text import GlyphRenderer, CachedGlyph
 from PIL import Image
 from typing import Tuple
 from dataclasses import dataclass
+from torch.nn.functional import conv2d
 
 
 def num_samples_for_img(
@@ -128,7 +129,7 @@ def get_index_mapping_for_glyph(
 
     # FIXME: hardcoded baseline is a problem, if the font size changes the
     # baseline offset needs to change as well
-    BASELINE = 4
+    BASELINE = dest_height / 6
     dest_start_y = int(dest_height - item.y_bearing - BASELINE)
 
     # Assuming no clipping, the end destination should completely be a function
@@ -252,6 +253,49 @@ def compute_glyph_diff_scores_for_samples(
     return scores
 
 
+def compute_gaussian_blurred_diff_scores_for_samples(
+    samples_for_comparison: torch.Tensor,
+    glyph_cache: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Where n = number of samples
+          c = number of possible characters
+          h = height
+          w = width
+          s = score
+
+    Returns (n, c, s), scores are the difference between a blurred glyph and the sample
+
+    samples_for_comparison: tensor of (n, h, w)
+    glyph_cache: tensor of (c, h, w)
+    """
+
+    c = glyph_cache.shape[0]
+    h = glyph_cache.shape[1]
+    w = glyph_cache.shape[2]
+
+    # 3x3 gaussian blur with steep falloff
+    kernel = torch.tensor(
+        [
+            [1, 5, 1],
+            [5, 25, 5],
+            [1, 5, 1],
+        ],
+        dtype=torch.float32,
+        device=glyph_cache.device,
+    )
+    kernel /= kernel.sum()
+    kernel = kernel.reshape(1, 1, 3, 3)
+
+    blurred_glyph_cache = conv2d(
+        glyph_cache.reshape((c, 1, h, w)), kernel, padding=1
+    ).reshape((c, h, w))
+    scores = compute_glyph_diff_scores_for_samples(
+        samples_for_comparison, blurred_glyph_cache
+    )
+    return scores
+
+
 def compute_brightness_scores_for_samples(
     samples_for_comparison: torch.Tensor, glyph_cache: torch.Tensor
 ) -> torch.Tensor:
@@ -262,7 +306,9 @@ def compute_brightness_scores_for_samples(
           w = width
           s = score
 
-    Returns (n, c, s)
+    Returns (n, c, s), scores are the difference between the overall brightness
+    of the glyph, and the overall brightness of the sample
+
     samples_for_comparison: tensor of (n, h, w)
     glyph_cache: tensor of (c, h, w)
     """
@@ -276,10 +322,36 @@ def compute_brightness_scores_for_samples(
     return (sample_sums - glyph_sums).abs()
 
 
+def compute_gaussian_blur_with_brightness_scores_for_samples(
+    samples_for_comparison: torch.Tensor, glyph_cache: torch.Tensor
+) -> torch.Tensor:
+    """
+    Where n = number of samples
+          c = number of possible characters
+          h = height
+          w = width
+          s = score
+
+    Returns (n, c, s), scores are a combination of a gaussian blurred glyph
+    diffed with the source image, and the difference between the brightness of
+    the glyph and the sample
+
+    samples_for_comparison: tensor of (n, h, w)
+    glyph_cache: tensor of (c, h, w)
+    """
+    scores = compute_gaussian_blurred_diff_scores_for_samples(
+        samples_for_comparison, glyph_cache
+    )
+    scores += (
+        compute_brightness_scores_for_samples(samples_for_comparison, glyph_cache) * 0.4
+    )
+    return scores
+
+
 def get_labels_for_samples(
     samples_for_comparison: torch.Tensor,
     glyph_cache: torch.Tensor,
-    scoring_fn=compute_brightness_scores_for_samples,
+    scoring_fn=compute_gaussian_blur_with_brightness_scores_for_samples,
 ) -> torch.Tensor:
     """
     Returns which cached index is the best for each sample

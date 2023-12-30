@@ -27,7 +27,7 @@ class GlyphRenderer:
     def __init__(self):
         self.glyph_cache = {}
         self.face = freetype.Face("Hack-Regular.ttf")
-        self.face.set_char_size(24 * 64)
+        self.face.set_char_size(36 * 64)
 
         char_code, index = self.face.get_first_char()
         while index != 0:

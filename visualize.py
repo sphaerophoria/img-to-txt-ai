@@ -7,10 +7,12 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from lib.img_to_text import GlyphRenderer
 from lib.img_sampler import (
     ImgSampler,
-    compute_glyph_diff_scores_for_samples,
-    compute_brightness_scores_for_samples,
+    compute_gaussian_blur_with_brightness_scores_for_samples,
+    compute_gaussian_blurred_diff_scores_for_samples,
     get_labels_for_samples,
     extract_w_h_samples,
+    compute_brightness_scores_for_samples,
+    compute_glyph_diff_scores_for_samples,
     num_samples_for_img,
     sample_to_sample_for_comparison,
 )
@@ -231,7 +233,9 @@ def main(image_path, sample_width, device):
     sample_width_comparison = sampler.img_for_comparison.shape[1] / num_x_samples
 
     score_metrics = {
+        "training_labels": compute_gaussian_blur_with_brightness_scores_for_samples,
         "diff": compute_glyph_diff_scores_for_samples,
+        "gaussian_blur": compute_gaussian_blurred_diff_scores_for_samples,
         "brightness": compute_brightness_scores_for_samples,
     }
 
