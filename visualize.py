@@ -78,15 +78,15 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
         self._set_response_headers("image/png")
         glyph_num = self.path[8:]
         img = self.server.img_sampler.glyph_cache[int(glyph_num)]
-        serve_numpy_as_png(img.numpy() * 255.0, self.wfile)
+        serve_numpy_as_png(img.cpu().numpy() * 255.0, self.wfile)
 
     def _get_image_input(self):
         self._set_response_headers("image/png")
-        serve_numpy_as_png(self.server.input_img.numpy(), self.wfile)
+        serve_numpy_as_png(self.server.input_img.cpu().numpy(), self.wfile)
 
     def _get_image_output(self):
         self._set_response_headers("image/png")
-        serve_numpy_as_png(self.server.output_img.numpy(), self.wfile)
+        serve_numpy_as_png(self.server.output_img.cpu().numpy(), self.wfile)
 
     def _get_sample_size(self):
         self._set_response_headers("application/json")
@@ -99,7 +99,7 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
     def _get_sample_input(self):
         img, _, _ = query_params_to_sample(self.path, self.server.img_sampler)
         self._set_response_headers("image/png")
-        img = serve_numpy_as_png(img.numpy() * 255.0, self.wfile)
+        img = serve_numpy_as_png(img.cpu().numpy() * 255.0, self.wfile)
 
     def _get_sample_output(self):
         sample, x, y = query_params_to_sample(self.path, self.server.img_sampler)
@@ -116,7 +116,7 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
         img = self.server.img_sampler.glyph_cache[label[0]]
 
         self._set_response_headers("image/png")
-        img = serve_numpy_as_png(img.numpy() * 255.0, self.wfile)
+        img = serve_numpy_as_png(img.cpu().numpy() * 255.0, self.wfile)
 
     def _get_sample_metadata(self):
         sample, x, y = query_params_to_sample(self.path, self.server.img_sampler)
@@ -182,13 +182,14 @@ def parse_args():
     parser = ArgumentParser()
     parser.add_argument("--image-path", required=True)
     parser.add_argument("--sample-width", type=int, required=True)
+    parser.add_argument("--device", type=str, default="cpu")
     return parser.parse_args()
 
 
-def main(image_path, sample_width):
+def main(image_path, sample_width, device):
     renderer = GlyphRenderer()
     sample_height = int(sample_width / renderer.char_aspect())
-    sampler = ImgSampler(sample_width, sample_height, renderer, image_path)
+    sampler = ImgSampler(sample_width, sample_height, renderer, image_path, device)
 
     num_y_samples, num_x_samples = num_samples_for_img(
         sampler.img, sample_width, sample_height
