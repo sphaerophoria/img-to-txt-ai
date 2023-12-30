@@ -19,5 +19,6 @@ pkgs.mkShell {
   ];
 
   NODE_PATH = "${pkgs.nodePackages.eslint}/lib/node_modules";
+  HSA_OVERRIDE_GFX_VERSION = "10.3.0";
 }
 
