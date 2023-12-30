@@ -7,14 +7,16 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from lib.img_to_text import GlyphRenderer
 from lib.img_sampler import (
     ImgSampler,
+    compute_glyph_diff_scores_for_samples,
+    compute_brightness_scores_for_samples,
     get_labels_for_samples,
-    get_samples_and_labels_for_img,
+    extract_w_h_samples,
     num_samples_for_img,
     sample_to_sample_for_comparison,
-    get_glyph_scores_for_samples,
 )
 from pathlib import Path
 from PIL import Image
+from typing import Dict
 
 import json
 import torch
@@ -40,18 +42,30 @@ def query_params_to_sample(url, img_sampler):
     query_params = urllib.parse.parse_qs(parsed_path.query)
     x = int(float(query_params["x"][0]))
     y = int(float(query_params["y"][0]))
+    metric = query_params.get("metric", None)
+    if metric is not None:
+        metric = metric[0]
     sample_height = img_sampler.sample_height
     sample_width = img_sampler.sample_width
     img = img_sampler.img[y : y + sample_height, x : x + sample_width]
-    return img, x, y
+    return img, x, y, metric
 
 
 class VisualizerServer(HTTPServer):
-    def __init__(self, img_sampler: ImgSampler, input_img, output_img, *args, **kwargs):
+    def __init__(
+        self,
+        img_sampler: ImgSampler,
+        input_img,
+        output_imgs,
+        score_metrics,
+        *args,
+        **kwargs
+    ):
         super().__init__(*args, **kwargs)
         self.img_sampler = img_sampler
-        self.output_img = output_img
+        self.output_imgs: Dict[str, torch.Tensor] = output_imgs
         self.input_img = input_img
+        self.score_metrics = score_metrics
 
 
 class VisualizerRequestHandler(BaseHTTPRequestHandler):
@@ -80,13 +94,24 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
         img = self.server.img_sampler.glyph_cache[int(glyph_num)]
         serve_numpy_as_png(img.cpu().numpy() * 255.0, self.wfile)
 
+    def _get_label_metrics(self):
+        self._set_response_headers("application/json")
+        options = json.dumps(list(self.server.output_imgs.keys()))
+        self.wfile.write(options.encode())
+
     def _get_image_input(self):
         self._set_response_headers("image/png")
         serve_numpy_as_png(self.server.input_img.cpu().numpy(), self.wfile)
 
     def _get_image_output(self):
+        parsed_path = urllib.parse.urlparse(self.path)
+        query_params = urllib.parse.parse_qs(parsed_path.query)
+        metric = query_params["metric"][0]
+
         self._set_response_headers("image/png")
-        serve_numpy_as_png(self.server.output_img.cpu().numpy(), self.wfile)
+        serve_numpy_as_png(
+            self.server.output_imgs[metric].cpu().cpu().numpy(), self.wfile
+        )
 
     def _get_sample_size(self):
         self._set_response_headers("application/json")
@@ -97,12 +122,14 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(response).encode())
 
     def _get_sample_input(self):
-        img, _, _ = query_params_to_sample(self.path, self.server.img_sampler)
+        img, _, _, _ = query_params_to_sample(self.path, self.server.img_sampler)
         self._set_response_headers("image/png")
         img = serve_numpy_as_png(img.cpu().numpy() * 255.0, self.wfile)
 
     def _get_sample_output(self):
-        sample, x, y = query_params_to_sample(self.path, self.server.img_sampler)
+        sample, x, y, metric = query_params_to_sample(
+            self.path, self.server.img_sampler
+        )
         sample_for_comparison = sample_to_sample_for_comparison(
             x,
             y,
@@ -111,7 +138,9 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
             self.server.img_sampler.img_for_comparison,
         )
         label = get_labels_for_samples(
-            sample_for_comparison.unsqueeze(0), self.server.img_sampler.glyph_cache
+            sample_for_comparison.unsqueeze(0),
+            self.server.img_sampler.glyph_cache,
+            self.server.score_metrics[metric],
         )
         img = self.server.img_sampler.glyph_cache[label[0]]
 
@@ -119,7 +148,9 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
         img = serve_numpy_as_png(img.cpu().numpy() * 255.0, self.wfile)
 
     def _get_sample_metadata(self):
-        sample, x, y = query_params_to_sample(self.path, self.server.img_sampler)
+        sample, x, y, metric = query_params_to_sample(
+            self.path, self.server.img_sampler
+        )
         sample_for_comparison = sample_to_sample_for_comparison(
             x,
             y,
@@ -127,7 +158,7 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
             self.server.img_sampler.img,
             self.server.img_sampler.img_for_comparison,
         )
-        scores = get_glyph_scores_for_samples(
+        scores = self.server.score_metrics[metric](
             sample_for_comparison.unsqueeze(0), self.server.img_sampler.glyph_cache
         )
         scores = scores.cpu()[0].tolist()
@@ -154,8 +185,9 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
         path_mapping = [
             ("/glyphs", self._get_glyphs),
             (StartsWith("/glyphs/"), self._get_glyph),
+            ("/label_metrics", self._get_label_metrics),
             ("/input", self._get_image_input),
-            ("/output", self._get_image_output),
+            (StartsWith("/output?"), self._get_image_output),
             ("/sample_size", self._get_sample_size),
             (StartsWith("/sample_input?"), self._get_sample_input),
             (StartsWith("/sample_output?"), self._get_sample_output),
@@ -195,36 +227,50 @@ def main(image_path, sample_width, device):
         sampler.img, sample_width, sample_height
     )
 
-    _, labels = get_samples_and_labels_for_img(
-        sample_width,
-        sample_height,
-        sampler.img,
-        sampler.img_for_comparison,
-        sampler.glyph_cache,
-    )
     sample_height_comparison = sampler.img_for_comparison.shape[0] / num_y_samples
     sample_width_comparison = sampler.img_for_comparison.shape[1] / num_x_samples
 
-    output_img = torch.zeros_like(sampler.img_for_comparison)
+    score_metrics = {
+        "diff": compute_glyph_diff_scores_for_samples,
+        "brightness": compute_brightness_scores_for_samples,
+    }
 
-    char_lookup = [chr(x) for x in renderer.glyph_cache.keys() if isinstance(x, int)]
-    for y in range(num_y_samples):
-        for x in range(num_x_samples):
-            label = labels[y * num_x_samples + x]
-            output_y_start = int(y * sample_height_comparison)
-            output_y_end = int(output_y_start + sample_height_comparison)
-            output_x_start = int(x * sample_width_comparison)
-            output_x_end = int(output_x_start + sample_width_comparison)
-            output_img[
-                output_y_start:output_y_end, output_x_start:output_x_end
-            ] = sampler.glyph_cache[label]
-            print(char_lookup[label], end="")
-        print()
+    output_imgs = {}
+    for label_metric, score_fn in score_metrics.items():
+        print(label_metric)
+        data_for_comparison = extract_w_h_samples(
+            int(sample_width_comparison),
+            int(sample_height_comparison),
+            sampler.img_for_comparison,
+        )
+        labels = get_labels_for_samples(
+            data_for_comparison, sampler.glyph_cache, score_fn
+        )
+        output_img = torch.zeros_like(sampler.img_for_comparison)
+
+        char_lookup = [
+            chr(x) for x in renderer.glyph_cache.keys() if isinstance(x, int)
+        ]
+        for y in range(num_y_samples):
+            for x in range(num_x_samples):
+                label = labels[y * num_x_samples + x]
+                output_y_start = int(y * sample_height_comparison)
+                output_y_end = int(output_y_start + sample_height_comparison)
+                output_x_start = int(x * sample_width_comparison)
+                output_x_end = int(output_x_start + sample_width_comparison)
+                output_img[
+                    output_y_start:output_y_end, output_x_start:output_x_end
+                ] = sampler.glyph_cache[label]
+                print(char_lookup[label], end="")
+            print()
+
+        output_imgs[label_metric] = output_img * 255.0
 
     server = VisualizerServer(
         sampler,
         sampler.img * 255.0,
-        output_img * 255.0,
+        output_imgs,
+        score_metrics,
         ("localhost", 9999),
         RequestHandlerClass=VisualizerRequestHandler,
     )

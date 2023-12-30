@@ -1,6 +1,11 @@
-class BoxDrawer {
+function getLabelMetric() {
+  return document.getElementById("label-metric-selection").value;
+}
+class Sampler {
   constructor(target, glyph_list, sample_width, sample_height) {
     this.glyph_list = glyph_list;
+    this.picture_x = 0;
+    this.picture_y = 0;
 
     this.div = document.createElement("div");
     this.div.classList.add("sample_view");
@@ -25,20 +30,25 @@ class BoxDrawer {
     const pageX = ev.pageX - this.div.offsetWidth / 2.0;
     const pageY = ev.pageY - this.div.offsetHeight / 2.0;
 
-    let picture_x = (pageX - ev.target.offsetLeft) / this.width_ratio;
-    let picture_y = (pageY - ev.target.offsetTop) / this.height_ratio;
+    this.picture_x = (pageX - ev.target.offsetLeft) / this.width_ratio;
+    this.picture_y = (pageY - ev.target.offsetTop) / this.height_ratio;
 
     this.div.style.left = "" + pageX + "px";
     this.div.style.top = "" + pageY + "px";
-    this.update(picture_x, picture_y);
+    this.update();
   }
 
-  update(picture_x, picture_y) {
+  update() {
     document.getElementById("sample-img-input").src =
-      "/sample_input?x=" + picture_x + "&y=" + picture_y;
+      "/sample_input?x=" + this.picture_x + "&y=" + this.picture_y;
     document.getElementById("sample-img-output").src =
-      "/sample_output?x=" + picture_x + "&y=" + picture_y;
-    this.glyph_list.update(picture_x, picture_y);
+      "/sample_output?x=" +
+      this.picture_x +
+      "&y=" +
+      this.picture_y +
+      "&metric=" +
+      getLabelMetric();
+    this.glyph_list.update(this.picture_x, this.picture_y);
   }
 }
 
@@ -58,7 +68,9 @@ class GlyphList {
   }
 
   async update(x, y) {
-    let scores = await fetch("/sample_metadata?x=" + x + "&y=" + y);
+    let scores = await fetch(
+      "/sample_metadata?x=" + x + "&y=" + y + "&metric=" + getLabelMetric(),
+    );
     scores = await scores.json();
 
     for (let i = 0; i < scores.length; ++i) {
@@ -87,6 +99,28 @@ class GlyphList {
   }
 }
 
+async function onLabelMetricSelection(ev, sampler) {
+  const outputImg = document.getElementById("output-img");
+  outputImg.src = "/output?metric=" + ev.target.value;
+  sampler.update();
+}
+
+function initLabelMetrics(label_metrics, sampler) {
+  const label_metrics_elem = document.getElementById("label-metric-selection");
+  for (const label_metric of label_metrics) {
+    const option = document.createElement("option");
+    option.value = label_metric;
+    option.innerHTML = label_metric;
+
+    label_metrics_elem.appendChild(option);
+  }
+
+  label_metrics_elem.onchange = (ev) => {
+    onLabelMetricSelection(ev, sampler);
+  };
+  label_metrics_elem.dispatchEvent(new Event("change"));
+}
+
 async function init() {
   const img = document.getElementById("input-img");
 
@@ -94,14 +128,25 @@ async function init() {
     response.json(),
   );
   let num_glyphs_promise = fetch("/glyphs").then((response) => response.json());
+  let label_metrics_promise = fetch("/label_metrics").then((response) =>
+    response.json(),
+  );
 
-  let [sample_size, glyphs_response] = await Promise.all([
+  let [sample_size, glyphs_response, label_metrics] = await Promise.all([
     sample_size_promise,
     num_glyphs_promise,
+    label_metrics_promise,
   ]);
+
   let glyph_list = new GlyphList(glyphs_response.num_glyphs);
 
-  new BoxDrawer(img, glyph_list, sample_size.width, sample_size.height);
+  const sampler = new Sampler(
+    img,
+    glyph_list,
+    sample_size.width,
+    sample_size.height,
+  );
+  initLabelMetrics(label_metrics, sampler);
 }
 
 window.addEventListener("DOMContentLoaded", function () {

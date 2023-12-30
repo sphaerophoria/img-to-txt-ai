@@ -220,7 +220,39 @@ def generate_glyph_cache(glyph_renderer: GlyphRenderer, device="cpu") -> torch.T
     return item_tensor / 255.0
 
 
-def get_glyph_scores_for_samples(
+def compute_glyph_diff_scores_for_samples(
+    samples_for_comparison: torch.Tensor, glyph_cache: torch.Tensor
+) -> torch.Tensor:
+    """
+    Where n = number of samples
+          c = number of possible characters
+          h = height
+          w = width
+          s = score
+
+    Returns (n, c, s), scores are the difference between a glyph and the sample
+
+    samples_for_comparison: tensor of (n, h, w)
+    glyph_cache: tensor of (c, h, w)
+    """
+
+    n = samples_for_comparison.shape[0]
+    c = glyph_cache.shape[0]
+    h = glyph_cache.shape[1]
+    w = glyph_cache.shape[2]
+
+    # (n, c, h, w)
+    samples_for_comparison = samples_for_comparison.repeat_interleave(c, dim=0)
+    # (n * c, h, w)
+    samples_for_comparison = samples_for_comparison.reshape((n, c, h, w))
+    # (n, c, h, w)
+    scores = (samples_for_comparison - glyph_cache).abs()
+    # (n, c, s)
+    scores = scores.sum(dim=(2, 3))
+    return scores
+
+
+def compute_brightness_scores_for_samples(
     samples_for_comparison: torch.Tensor, glyph_cache: torch.Tensor
 ) -> torch.Tensor:
     """
@@ -245,7 +277,9 @@ def get_glyph_scores_for_samples(
 
 
 def get_labels_for_samples(
-    samples_for_comparison: torch.Tensor, glyph_cache: torch.Tensor
+    samples_for_comparison: torch.Tensor,
+    glyph_cache: torch.Tensor,
+    scoring_fn=compute_brightness_scores_for_samples,
 ) -> torch.Tensor:
     """
     Returns which cached index is the best for each sample
@@ -267,9 +301,7 @@ def get_labels_for_samples(
     # Batch the score calculation to avoid OOMing
     BATCH_SIZE = 100
     for i in range(0, labels.shape[0], BATCH_SIZE):
-        scores = get_glyph_scores_for_samples(
-            samples_for_comparison[i : i + BATCH_SIZE], glyph_cache
-        )
+        scores = scoring_fn(samples_for_comparison[i : i + BATCH_SIZE], glyph_cache)
         labels[i : i + BATCH_SIZE] = scores.min(dim=1)[1]
 
     return labels
