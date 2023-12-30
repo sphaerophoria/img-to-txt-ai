@@ -229,9 +229,8 @@ def compute_glyph_diff_scores_for_samples(
           c = number of possible characters
           h = height
           w = width
-          s = score
 
-    Returns (n, c, s), scores are the difference between a glyph and the sample
+    Returns (n, c), scores are the difference between a glyph and the sample
 
     samples_for_comparison: tensor of (n, h, w)
     glyph_cache: tensor of (c, h, w)
@@ -242,13 +241,11 @@ def compute_glyph_diff_scores_for_samples(
     h = glyph_cache.shape[1]
     w = glyph_cache.shape[2]
 
-    # (n, c, h, w)
-    samples_for_comparison = samples_for_comparison.repeat_interleave(c, dim=0)
-    # (n * c, h, w)
-    samples_for_comparison = samples_for_comparison.reshape((n, c, h, w))
+    samples_for_comparison = samples_for_comparison.reshape((n, 1, h, w))
+    glyph_cache = glyph_cache.reshape((1, c, h, w))
     # (n, c, h, w)
     scores = (samples_for_comparison - glyph_cache).abs()
-    # (n, c, s)
+    # (n, c)
     scores = scores.sum(dim=(2, 3))
     return scores
 
@@ -262,9 +259,8 @@ def compute_gaussian_blurred_diff_scores_for_samples(
           c = number of possible characters
           h = height
           w = width
-          s = score
 
-    Returns (n, c, s), scores are the difference between a blurred glyph and the sample
+    Returns (n, c), scores are the difference between a blurred glyph and the sample
 
     samples_for_comparison: tensor of (n, h, w)
     glyph_cache: tensor of (c, h, w)
@@ -304,9 +300,8 @@ def compute_brightness_scores_for_samples(
           c = number of possible characters
           h = height
           w = width
-          s = score
 
-    Returns (n, c, s), scores are the difference between the overall brightness
+    Returns (n, c), scores are the difference between the overall brightness
     of the glyph, and the overall brightness of the sample
 
     samples_for_comparison: tensor of (n, h, w)
@@ -317,9 +312,10 @@ def compute_brightness_scores_for_samples(
     c = glyph_cache.shape[0]
 
     sample_sums = samples_for_comparison.sum(dim=(1, 2))
-    sample_sums = sample_sums.reshape((n, 1)).repeat((1, c))
-    glyph_sums = glyph_cache.sum(dim=(1, 2))
-    return (sample_sums - glyph_sums).abs()
+    sample_sums = sample_sums.reshape((-1, 1, 1))
+    glyph_sums = glyph_cache.sum(dim=(1, 2)).reshape((1, -1, 1))
+    ret = (sample_sums - glyph_sums).abs().reshape((n, c))
+    return ret
 
 
 def compute_gaussian_blur_with_brightness_scores_for_samples(
@@ -330,9 +326,8 @@ def compute_gaussian_blur_with_brightness_scores_for_samples(
           c = number of possible characters
           h = height
           w = width
-          s = score
 
-    Returns (n, c, s), scores are a combination of a gaussian blurred glyph
+    Returns (n, c), scores are a combination of a gaussian blurred glyph
     diffed with the source image, and the difference between the brightness of
     the glyph and the sample
 
