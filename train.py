@@ -70,7 +70,7 @@ def main(image_path, device):
     sampler = ImgSampler(sample_width, sample_height, renderer, image_path, device)
     net = Network(sample_width * sample_height, sampler.glyph_cache.shape[0]).to(device)
 
-    optimizer = optim.Adam(net.parameters(), lr=0.001)
+    optimizer = optim.Adam(net.parameters(), lr=0.05)
     criterion = nn.CrossEntropyLoss()
     i = 0
 
@@ -84,8 +84,9 @@ def main(image_path, device):
         loss.backward()
         optimizer.step()
         i += 1
-        if i % 1000 == 1:
+        if i % 50 == 1:
             print("loss", loss)
+        if i % 200 == 1:
             render_full_image(
                 sampler.img, sampler.glyph_cache, sample_width, sample_height, i, net
             )
