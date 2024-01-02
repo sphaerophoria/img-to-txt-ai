@@ -39,6 +39,8 @@ class GlyphRenderer:
             char_code, index = self.face.get_next_char(char_code, index)
 
     def render_char(self, char):
+        if isinstance(char, str):
+            char = ord(char)
         cached = self.glyph_cache.get(char, None)
         if cached is None:
             self.face.load_char(char)
