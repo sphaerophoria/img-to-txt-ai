@@ -5,6 +5,7 @@ pkgs.mkShell {
     python3
     python3Packages.numpy
     python3Packages.torchWithRocm
+    python3Packages.torchvision
     python3Packages.freetype-py
     python3Packages.pillow
     nodePackages.pyright

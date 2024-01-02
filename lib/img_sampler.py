@@ -1,6 +1,7 @@
 import math
 import numpy
 import torch
+import torchvision.transforms.functional as transforms
 
 from lib.img_to_text import GlyphRenderer, CachedGlyph
 from PIL import Image
@@ -265,6 +266,13 @@ def compute_glyph_diff_scores_for_samples(
     h = glyph_cache.shape[1]
     w = glyph_cache.shape[2]
 
+    h = int(h / 2)
+    w = int(w / 2)
+    samples_for_comparison = transforms.resize(
+        samples_for_comparison, [h, w], antialias=True
+    )
+    glyph_cache = transforms.resize(glyph_cache, [h, w], antialias=True)
+
     samples_for_comparison = samples_for_comparison.reshape((n, 1, h, w))
     glyph_cache = glyph_cache.reshape((1, c, h, w))
     # (n, c, h, w)
@@ -318,7 +326,7 @@ def compute_glyph_diff_with_brightness_scores_for_samples(
     """
     scores = compute_glyph_diff_scores_for_samples(samples_for_comparison, glyph_cache)
     scores += (
-        compute_brightness_scores_for_samples(samples_for_comparison, glyph_cache) * 0.4
+        compute_brightness_scores_for_samples(samples_for_comparison, glyph_cache) * 0.2
     )
     return scores
 
