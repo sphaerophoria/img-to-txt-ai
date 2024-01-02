@@ -243,7 +243,7 @@ def blur_glyph_cache(glyph_cache: torch.Tensor) -> torch.Tensor:
     blurred_glyph_cache = conv2d(
         glyph_cache.reshape((c, 1, h, w)), kernel, padding=1
     ).reshape((c, h, w))
-    return blurred_glyph_cache
+    return (blurred_glyph_cache * 255.0).to(torch.uint8)
 
 
 def compute_glyph_diff_scores_for_samples(
@@ -261,6 +261,9 @@ def compute_glyph_diff_scores_for_samples(
     glyph_cache: tensor of (c, h, w)
     """
 
+    assert samples_for_comparison.dtype == torch.uint8
+    assert glyph_cache.dtype == torch.uint8
+
     n = samples_for_comparison.shape[0]
     c = glyph_cache.shape[0]
     h = glyph_cache.shape[1]
@@ -275,10 +278,18 @@ def compute_glyph_diff_scores_for_samples(
 
     samples_for_comparison = samples_for_comparison.reshape((n, 1, h, w))
     glyph_cache = glyph_cache.reshape((1, c, h, w))
+
     # (n, c, h, w)
-    scores = (samples_for_comparison - glyph_cache).abs()
+    scores = samples_for_comparison.to(torch.int16) - glyph_cache
+
+    scores.abs_()
+    assert int(scores.max()) < 256
+    RIGHT_SHIFT = 1
+    scores.bitwise_right_shift_(RIGHT_SHIFT)
+    # Make sure that the max sum can fit into our output
+    assert ((255 >> RIGHT_SHIFT) * h * w) < (1 << 15)
     # (n, c)
-    scores = scores.sum(dim=(2, 3))
+    scores = scores.sum(dim=(2, 3), dtype=torch.int16)
     return scores
 
 
@@ -324,10 +335,12 @@ def compute_glyph_diff_with_brightness_scores_for_samples(
     samples_for_comparison: tensor of (n, h, w)
     glyph_cache: tensor of (c, h, w)
     """
-    scores = compute_glyph_diff_scores_for_samples(samples_for_comparison, glyph_cache)
-    scores += (
-        compute_brightness_scores_for_samples(samples_for_comparison, glyph_cache) * 0.2
-    )
+    scores = compute_glyph_diff_scores_for_samples(
+        samples_for_comparison, glyph_cache
+    ).to(torch.float32)
+    scores += compute_brightness_scores_for_samples(
+        samples_for_comparison, glyph_cache
+    ) * torch.tensor(0.07, dtype=torch.float32)
     return scores
 
 
@@ -380,8 +393,8 @@ class ImgSampler:
                 ),
             )
         )
-        self.img_for_comparison = (
-            torch.tensor(numpy.array(img_for_comparison), device=device) / 255.0
+        self.img_for_comparison = torch.tensor(
+            numpy.array(img_for_comparison), dtype=torch.uint8, device=device
         )
         self.glyph_cache = generate_glyph_cache(self.glyph_renderer, device)
         self.blurred_glyph_cache = blur_glyph_cache(self.glyph_cache)

@@ -249,7 +249,7 @@ def main(image_path, sample_width, device):
         labels = get_labels_for_samples(
             data_for_comparison, sampler.blurred_glyph_cache, score_fn
         )
-        output_img = torch.zeros_like(sampler.img_for_comparison)
+        output_img = torch.zeros_like(sampler.img_for_comparison, dtype=torch.float32)
 
         char_lookup = [
             chr(x) for x in renderer.glyph_cache.keys() if isinstance(x, int)

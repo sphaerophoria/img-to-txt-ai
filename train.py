@@ -43,7 +43,7 @@ def render_full_image(img, glyph_cache, sample_width, sample_height, iter, net):
             num_y_samples * glyph_cache.shape[1],
             num_x_samples * glyph_cache.shape[2],
         ),
-        dtype=numpy.uint8,
+        dtype=numpy.float32,
     )
 
     char_idxs = torch.max(predictions, 1)[1]
