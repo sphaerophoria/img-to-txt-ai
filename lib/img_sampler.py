@@ -360,17 +360,9 @@ def get_labels_for_samples(
     glyph_cache: tensor of (c, h, w)
     """
 
-    labels = torch.zeros(
-        samples_for_comparison.shape[0],
-        device=samples_for_comparison.device,
-        dtype=torch.int64,
-    )
-
     # Batch the score calculation to avoid OOMing
-    BATCH_SIZE = 100
-    for i in range(0, labels.shape[0], BATCH_SIZE):
-        scores = scoring_fn(samples_for_comparison[i : i + BATCH_SIZE], glyph_cache)
-        labels[i : i + BATCH_SIZE] = scores.min(dim=1)[1]
+    scores = scoring_fn(samples_for_comparison, glyph_cache)
+    labels = scores.min(dim=1)[1]
 
     return labels
 
