@@ -6,9 +6,8 @@ from http import HTTPStatus
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from lib.img_to_text import GlyphRenderer
 from lib.img_sampler import (
+    compute_glyph_diff_with_brightness_scores_for_samples,
     ImgSampler,
-    compute_gaussian_blur_with_brightness_scores_for_samples,
-    compute_gaussian_blurred_diff_scores_for_samples,
     get_labels_for_samples,
     extract_w_h_samples,
     compute_brightness_scores_for_samples,
@@ -141,7 +140,7 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
         )
         label = get_labels_for_samples(
             sample_for_comparison.unsqueeze(0),
-            self.server.img_sampler.glyph_cache,
+            self.server.img_sampler.blurred_glyph_cache,
             self.server.score_metrics[metric],
         )
         img = self.server.img_sampler.glyph_cache[label[0]]
@@ -161,7 +160,8 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
             self.server.img_sampler.img_for_comparison,
         )
         scores = self.server.score_metrics[metric](
-            sample_for_comparison.unsqueeze(0), self.server.img_sampler.glyph_cache
+            sample_for_comparison.unsqueeze(0),
+            self.server.img_sampler.blurred_glyph_cache,
         )
         scores = scores.cpu()[0].tolist()
         self._set_response_headers("application/json")
@@ -233,9 +233,8 @@ def main(image_path, sample_width, device):
     sample_width_comparison = sampler.img_for_comparison.shape[1] / num_x_samples
 
     score_metrics = {
-        "training_labels": compute_gaussian_blur_with_brightness_scores_for_samples,
-        "diff": compute_glyph_diff_scores_for_samples,
-        "gaussian_blur": compute_gaussian_blurred_diff_scores_for_samples,
+        "training_labels": compute_glyph_diff_with_brightness_scores_for_samples,
+        "blurred_diff": compute_glyph_diff_scores_for_samples,
         "brightness": compute_brightness_scores_for_samples,
     }
 
@@ -248,7 +247,7 @@ def main(image_path, sample_width, device):
             sampler.img_for_comparison,
         )
         labels = get_labels_for_samples(
-            data_for_comparison, sampler.glyph_cache, score_fn
+            data_for_comparison, sampler.blurred_glyph_cache, score_fn
         )
         output_img = torch.zeros_like(sampler.img_for_comparison)
 

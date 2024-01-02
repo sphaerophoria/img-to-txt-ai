@@ -221,6 +221,30 @@ def generate_glyph_cache(glyph_renderer: GlyphRenderer, device="cpu") -> torch.T
     return item_tensor / 255.0
 
 
+def blur_glyph_cache(glyph_cache: torch.Tensor) -> torch.Tensor:
+    c = glyph_cache.shape[0]
+    h = glyph_cache.shape[1]
+    w = glyph_cache.shape[2]
+
+    # 3x3 gaussian blur with steep falloff
+    kernel = torch.tensor(
+        [
+            [1, 5, 1],
+            [5, 25, 5],
+            [1, 5, 1],
+        ],
+        dtype=torch.float32,
+        device=glyph_cache.device,
+    )
+    kernel /= kernel.sum()
+    kernel = kernel.reshape(1, 1, 3, 3)
+
+    blurred_glyph_cache = conv2d(
+        glyph_cache.reshape((c, 1, h, w)), kernel, padding=1
+    ).reshape((c, h, w))
+    return blurred_glyph_cache
+
+
 def compute_glyph_diff_scores_for_samples(
     samples_for_comparison: torch.Tensor, glyph_cache: torch.Tensor
 ) -> torch.Tensor:
@@ -250,48 +274,6 @@ def compute_glyph_diff_scores_for_samples(
     return scores
 
 
-def compute_gaussian_blurred_diff_scores_for_samples(
-    samples_for_comparison: torch.Tensor,
-    glyph_cache: torch.Tensor,
-) -> torch.Tensor:
-    """
-    Where n = number of samples
-          c = number of possible characters
-          h = height
-          w = width
-
-    Returns (n, c), scores are the difference between a blurred glyph and the sample
-
-    samples_for_comparison: tensor of (n, h, w)
-    glyph_cache: tensor of (c, h, w)
-    """
-
-    c = glyph_cache.shape[0]
-    h = glyph_cache.shape[1]
-    w = glyph_cache.shape[2]
-
-    # 3x3 gaussian blur with steep falloff
-    kernel = torch.tensor(
-        [
-            [1, 5, 1],
-            [5, 25, 5],
-            [1, 5, 1],
-        ],
-        dtype=torch.float32,
-        device=glyph_cache.device,
-    )
-    kernel /= kernel.sum()
-    kernel = kernel.reshape(1, 1, 3, 3)
-
-    blurred_glyph_cache = conv2d(
-        glyph_cache.reshape((c, 1, h, w)), kernel, padding=1
-    ).reshape((c, h, w))
-    scores = compute_glyph_diff_scores_for_samples(
-        samples_for_comparison, blurred_glyph_cache
-    )
-    return scores
-
-
 def compute_brightness_scores_for_samples(
     samples_for_comparison: torch.Tensor, glyph_cache: torch.Tensor
 ) -> torch.Tensor:
@@ -318,7 +300,7 @@ def compute_brightness_scores_for_samples(
     return ret
 
 
-def compute_gaussian_blur_with_brightness_scores_for_samples(
+def compute_glyph_diff_with_brightness_scores_for_samples(
     samples_for_comparison: torch.Tensor, glyph_cache: torch.Tensor
 ) -> torch.Tensor:
     """
@@ -334,9 +316,7 @@ def compute_gaussian_blur_with_brightness_scores_for_samples(
     samples_for_comparison: tensor of (n, h, w)
     glyph_cache: tensor of (c, h, w)
     """
-    scores = compute_gaussian_blurred_diff_scores_for_samples(
-        samples_for_comparison, glyph_cache
-    )
+    scores = compute_glyph_diff_scores_for_samples(samples_for_comparison, glyph_cache)
     scores += (
         compute_brightness_scores_for_samples(samples_for_comparison, glyph_cache) * 0.4
     )
@@ -346,7 +326,7 @@ def compute_gaussian_blur_with_brightness_scores_for_samples(
 def get_labels_for_samples(
     samples_for_comparison: torch.Tensor,
     glyph_cache: torch.Tensor,
-    scoring_fn=compute_gaussian_blur_with_brightness_scores_for_samples,
+    scoring_fn=compute_glyph_diff_with_brightness_scores_for_samples,
 ) -> torch.Tensor:
     """
     Returns which cached index is the best for each sample
@@ -396,6 +376,7 @@ class ImgSampler:
             torch.tensor(numpy.array(img_for_comparison), device=device) / 255.0
         )
         self.glyph_cache = generate_glyph_cache(self.glyph_renderer, device)
+        self.blurred_glyph_cache = blur_glyph_cache(self.glyph_cache)
         self.char_width = int(glyph_renderer.char_width())
         self.char_height = int(glyph_renderer.row_height())
         self.glyph_renderer = glyph_renderer
@@ -406,5 +387,5 @@ class ImgSampler:
             self.sample_height,
             self.img,
             self.img_for_comparison,
-            self.glyph_cache,
+            self.blurred_glyph_cache,
         )
