@@ -253,7 +253,7 @@ def parse_args():
 
 
 def main(data_path, sample_width, device):
-    _, glyph_cache = generate_glyph_cache(device)
+    _, glyph_cache = generate_glyph_cache(device=device)
     sample_height = int(sample_width * glyph_cache.shape[1] / glyph_cache.shape[2])
     sampler = NestedDirImageLoader(
         data_path, sample_width, sample_height, glyph_cache, device

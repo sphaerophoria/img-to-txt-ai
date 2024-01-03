@@ -158,6 +158,15 @@ def _render_glyphs(face) -> Tuple[List[int], List[FreetypeGlyph]]:
     return char_codes, glyphs
 
 
+def _glyphs_from_char_codes(char_codes, face):
+    glyphs = []
+    for code in char_codes:
+        rendered = _render_char(face, code)
+        glyphs.append(rendered)
+
+    return glyphs
+
+
 def _insert_glyph_into_cache(glyph: FreetypeGlyph, glyph_slot: torch.Tensor):
     # FIXME: if character is too big, we need to handle that more gracefully
     index_mapping = _get_index_mapping_for_glyph(
@@ -197,14 +206,20 @@ def _glyph_cache_from_glyphs(
     return glyph_cache
 
 
-def generate_glyph_cache(device="cpu") -> Tuple[List[int], torch.Tensor]:
+def generate_glyph_cache(
+    char_codes=None, device="cpu"
+) -> Tuple[List[int], torch.Tensor]:
     """
     returns tensor of shape (c, h, w) where c is the number of glyphs, h is height, and w is width of the generated bitmaps
     """
     face = _make_font_face()
-    char_codes, glyphs = _render_glyphs(face)
     char_height = int(_get_row_height(face))
     char_width = int(_get_char_width(face))
+
+    if char_codes is None:
+        char_codes, glyphs = _render_glyphs(face)
+    else:
+        glyphs = _glyphs_from_char_codes(char_codes, face)
 
     glyph_cache = _glyph_cache_from_glyphs(
         glyphs, char_width, char_height, device=device
