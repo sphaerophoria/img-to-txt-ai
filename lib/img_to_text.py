@@ -4,15 +4,8 @@ import freetype
 import numpy
 
 from dataclasses import dataclass
-from argparse import ArgumentParser
 
 SAMPLE_WIDTH = 12
-
-
-def parse_args():
-    parser = ArgumentParser()
-    parser.add_argument("--image-path", required=True)
-    return parser.parse_args()
 
 
 @dataclass
