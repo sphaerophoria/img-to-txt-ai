@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
-from lib.img_to_text import GlyphRenderer
+from lib.img_to_text import TextRenderer
 from lib.img_sampler import (
     ImgSampler,
     num_samples_for_img,
     extract_w_h_samples,
 )
+from lib.img_to_text import generate_glyph_cache
 
 from argparse import ArgumentParser
 from PIL import Image
@@ -64,11 +65,14 @@ def render_full_image(img, glyph_cache, sample_width, sample_height, iter, net):
 
 
 def main(image_path, device):
-    renderer = GlyphRenderer()
+    _, glyph_cache = generate_glyph_cache(device)
     sample_width = 12
-    sample_height = int(sample_width / renderer.char_aspect())
-    sampler = ImgSampler(sample_width, sample_height, renderer, image_path, device)
-    net = Network(sample_width * sample_height, sampler.glyph_cache.shape[0]).to(device)
+    sample_height = int(sample_width * glyph_cache.shape[1] / glyph_cache.shape[2])
+    print(sample_height)
+    text_renderer = TextRenderer(glyph_cache)
+    sampler = ImgSampler(sample_width, sample_height, glyph_cache, image_path, device)
+    samples_per_row = int(sampler.img.shape[1] / sample_width)
+    net = Network(sample_width * sample_height, glyph_cache.shape[0]).to(device)
 
     optimizer = optim.Adam(net.parameters(), lr=0.05)
     criterion = nn.CrossEntropyLoss()
@@ -87,9 +91,8 @@ def main(image_path, device):
         if i % 50 == 1:
             print("loss", loss)
         if i % 200 == 1:
-            render_full_image(
-                sampler.img, sampler.glyph_cache, sample_width, sample_height, i, net
-            )
+            img = text_renderer.render(torch.max(output, dim=1)[1], samples_per_row)
+            Image.fromarray(img.cpu().numpy()).save("{}.png".format(i))
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from argparse import ArgumentParser
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from lib.img_to_text import GlyphRenderer
+from lib.img_to_text import TextRenderer, generate_glyph_cache
 from lib.img_sampler import (
     compute_glyph_diff_with_brightness_scores_for_samples,
     ImgSampler,
@@ -56,6 +56,7 @@ class VisualizerServer(HTTPServer):
     def __init__(
         self,
         img_sampler: ImgSampler,
+        glyph_cache,
         input_img,
         output_imgs,
         score_metrics,
@@ -67,6 +68,7 @@ class VisualizerServer(HTTPServer):
         self.output_imgs: Dict[str, torch.Tensor] = output_imgs
         self.input_img = input_img
         self.score_metrics = score_metrics
+        self.glyph_cache = glyph_cache
 
 
 class VisualizerRequestHandler(BaseHTTPRequestHandler):
@@ -84,16 +86,14 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
 
     def _get_glyphs(self):
         self._set_response_headers("application/json")
-        output = json.dumps(
-            {"num_glyphs": self.server.img_sampler.glyph_cache.shape[0]}
-        )
+        output = json.dumps({"num_glyphs": self.server.glyph_cache.shape[0]})
         self.wfile.write(output.encode())
 
     def _get_glyph(self):
         self._set_response_headers("image/png")
         glyph_num = self.path[8:]
-        img = self.server.img_sampler.glyph_cache[int(glyph_num)]
-        serve_numpy_as_png(img.cpu().numpy() * 255.0, self.wfile)
+        img = self.server.glyph_cache[int(glyph_num)]
+        serve_numpy_as_png(img.cpu().numpy(), self.wfile)
 
     def _get_label_metrics(self):
         self._set_response_headers("application/json")
@@ -143,10 +143,10 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
             self.server.img_sampler.blurred_glyph_cache,
             self.server.score_metrics[metric],
         )
-        img = self.server.img_sampler.glyph_cache[label[0]]
+        img = self.server.glyph_cache[label[0]]
 
         self._set_response_headers("image/png")
-        img = serve_numpy_as_png(img.cpu().numpy() * 255.0, self.wfile)
+        img = serve_numpy_as_png(img.cpu().numpy(), self.wfile)
 
     def _get_sample_metadata(self):
         sample, x, y, metric = query_params_to_sample(
@@ -221,9 +221,9 @@ def parse_args():
 
 
 def main(image_path, sample_width, device):
-    renderer = GlyphRenderer()
-    sample_height = int(sample_width / renderer.char_aspect())
-    sampler = ImgSampler(sample_width, sample_height, renderer, image_path, device)
+    char_codes, glyph_cache = generate_glyph_cache()
+    sample_height = int(sample_width * glyph_cache.shape[1] / glyph_cache.shape[2])
+    sampler = ImgSampler(sample_width, sample_height, glyph_cache, image_path, device)
 
     num_y_samples, num_x_samples = num_samples_for_img(
         sampler.img, sample_width, sample_height
@@ -231,6 +231,7 @@ def main(image_path, sample_width, device):
 
     sample_height_comparison = sampler.img_for_comparison.shape[0] / num_y_samples
     sample_width_comparison = sampler.img_for_comparison.shape[1] / num_x_samples
+    text_renderer = TextRenderer(glyph_cache)
 
     score_metrics = {
         "training_labels": compute_glyph_diff_with_brightness_scores_for_samples,
@@ -249,28 +250,11 @@ def main(image_path, sample_width, device):
         labels = get_labels_for_samples(
             data_for_comparison, sampler.blurred_glyph_cache, score_fn
         )
-        output_img = torch.zeros_like(sampler.img_for_comparison, dtype=torch.float32)
-
-        char_lookup = [
-            chr(x) for x in renderer.glyph_cache.keys() if isinstance(x, int)
-        ]
-        for y in range(num_y_samples):
-            for x in range(num_x_samples):
-                label = labels[y * num_x_samples + x]
-                output_y_start = int(y * sample_height_comparison)
-                output_y_end = int(output_y_start + sample_height_comparison)
-                output_x_start = int(x * sample_width_comparison)
-                output_x_end = int(output_x_start + sample_width_comparison)
-                output_img[
-                    output_y_start:output_y_end, output_x_start:output_x_end
-                ] = sampler.glyph_cache[label]
-                print(char_lookup[label], end="")
-            print()
-
-        output_imgs[label_metric] = output_img * 255.0
+        output_imgs[label_metric] = text_renderer.render(labels, num_x_samples)
 
     server = VisualizerServer(
         sampler,
+        glyph_cache,
         sampler.img * 255.0,
         output_imgs,
         score_metrics,
