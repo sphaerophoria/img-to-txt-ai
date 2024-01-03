@@ -1,26 +1,101 @@
-function getLabelMetric() {
-  return document.getElementById("label-metric-selection").value;
+function cloneFullImg() {
+  const template = document.getElementById("full-img-template");
+  return template.content.cloneNode(true).firstElementChild;
 }
+
+class InputImage {
+  constructor(parentElement) {
+    let div = cloneFullImg();
+    this.img = div.querySelector("img");
+    parentElement.appendChild(div);
+    this.update(0);
+  }
+
+  update(id) {
+    this.img.src = "/input?id=" + id;
+  }
+}
+
+class OutputImage {
+  constructor(parentElement, initial_metric) {
+    let div = cloneFullImg();
+    this.img = div.querySelector("img");
+    this.id = 0;
+    this.metric = initial_metric;
+    parentElement.appendChild(div);
+    this.update();
+  }
+
+  updateId(id) {
+    this.id = id;
+    this.update();
+  }
+
+  updateMetric(metric) {
+    this.metric = metric;
+    this.update();
+  }
+
+  update() {
+    this.img.src = "/output?id=" + this.id + "&metric=" + this.metric;
+  }
+}
+
+class ImageUpdater {
+  constructor(inputImage, outputImage, sampler, glyphList) {
+    this.id = 0;
+    this.inputImage = inputImage;
+    this.outputImage = outputImage;
+    this.sampler = sampler;
+    this.glyphList = glyphList;
+  }
+
+  prev() {
+    this.id -= 1;
+    this.update();
+  }
+
+  next() {
+    this.id += 1;
+    this.update();
+  }
+
+  update() {
+    this.inputImage.update(this.id);
+    this.outputImage.updateId(this.id);
+    this.glyphList.updateImage(this.id);
+    this.sampler.updateImageId(this.id);
+  }
+}
+
 class Sampler {
-  constructor(target, glyph_list, sample_width, sample_height) {
-    this.glyph_list = glyph_list;
+  constructor(target, glyphList, sample_width, sample_height, initialMetric) {
+    this.glyphList = glyphList;
     this.picture_x = 0;
     this.picture_y = 0;
+    this.target = target;
 
     this.div = document.createElement("div");
     this.div.classList.add("sample_view");
     this.div.style.position = "absolute";
 
-    // FIXME: add listener for img size change
     this.width_ratio = target.width / target.naturalWidth;
     this.height_ratio = target.height / target.naturalHeight;
+    this.id = 0;
+    this.metric = initialMetric;
 
-    this.div.style.width = "" + sample_width * this.width_ratio + "px";
-    this.div.style.height = "" + sample_height * this.height_ratio + "px";
+    target.addEventListener("load", () => {
+      const widthRatio = this.getWidthRatio();
+      const heightRatio = this.getHeightRatio();
+      this.div.style.width = "" + sample_width * widthRatio + "px";
+      this.div.style.height = "" + sample_height * heightRatio + "px";
+
+      this.update(this.id);
+    });
 
     target.parentElement.insertBefore(this.div, target);
     target.onclick = this.onClick.bind(this);
-    this.update(0, 0);
+    this.update(this.id);
   }
 
   onClick(ev) {
@@ -29,47 +104,101 @@ class Sampler {
     // pretend we clicked there
     const pageX = ev.pageX - this.div.offsetWidth / 2.0;
     const pageY = ev.pageY - this.div.offsetHeight / 2.0;
+    const widthRatio = this.getWidthRatio();
+    const heightRatio = this.getHeightRatio();
 
-    this.picture_x = (pageX - ev.target.offsetLeft) / this.width_ratio;
-    this.picture_y = (pageY - ev.target.offsetTop) / this.height_ratio;
+    this.picture_x = (pageX - ev.target.offsetLeft) / widthRatio;
+    this.picture_y = (pageY - ev.target.offsetTop) / heightRatio;
 
     this.div.style.left = "" + pageX + "px";
     this.div.style.top = "" + pageY + "px";
+    this.update(this.id);
+  }
+
+  updateImageId(id) {
+    this.id = id;
+    this.update();
+  }
+
+  updateMetric(metric) {
+    this.metric = metric;
     this.update();
   }
 
   update() {
     document.getElementById("sample-img-input").src =
-      "/sample_input?x=" + this.picture_x + "&y=" + this.picture_y;
+      "/sample_input?x=" +
+      this.picture_x +
+      "&y=" +
+      this.picture_y +
+      "&image_id=" +
+      this.id;
     document.getElementById("sample-img-output").src =
       "/sample_output?x=" +
       this.picture_x +
       "&y=" +
       this.picture_y +
       "&metric=" +
-      getLabelMetric();
-    this.glyph_list.update(this.picture_x, this.picture_y);
+      this.metric +
+      "&image_id=" +
+      this.id;
+    this.glyphList.updatePos(this.picture_x, this.picture_y);
+  }
+
+  getWidthRatio() {
+    return this.target.width / this.target.naturalWidth;
+  }
+
+  getHeightRatio() {
+    return this.target.height / this.target.naturalHeight;
   }
 }
 
 class GlyphList {
-  constructor(num_glyphs) {
+  constructor(num_glyphs, initialMetric) {
     this.divs = [];
-    const glyph_list = document.getElementById("glyphs");
+    this.id = 0;
+    this.x = 0;
+    this.y = 0;
+    this.metric = initialMetric;
+    const glyphList = document.getElementById("glyphs");
     let templateCard = document.getElementById("glyph-card-template");
     for (let glyph_num = 0; glyph_num < num_glyphs; glyph_num++) {
       let div = templateCard.content.cloneNode(true).firstElementChild;
 
       let img = div.querySelector("img");
       img.src = "/glyphs/" + glyph_num;
-      div = glyph_list.appendChild(div);
+      div = glyphList.appendChild(div);
       this.divs.push(div);
     }
   }
 
-  async update(x, y) {
+  async updateMetric(metric) {
+    this.metric = metric;
+    await this.update();
+  }
+
+  async updateImage(id) {
+    this.id = id;
+    await this.update();
+  }
+
+  async updatePos(x, y) {
+    this.x = x;
+    this.y = y;
+    await this.update();
+  }
+
+  async update() {
     let scores = await fetch(
-      "/sample_metadata?x=" + x + "&y=" + y + "&metric=" + getLabelMetric(),
+      "/sample_metadata?x=" +
+        this.x +
+        "&y=" +
+        this.y +
+        "&metric=" +
+        this.metric +
+        "&image_id=" +
+        this.id,
     );
     scores = await scores.json();
 
@@ -90,24 +219,23 @@ class GlyphList {
       return 0;
     });
 
-    const glyph_list = this.divs[0].parentElement;
-    glyph_list.innerHTML = "";
+    const glyphList = this.divs[0].parentElement;
+    glyphList.innerHTML = "";
 
     for (let i = 0; i < scores.length; ++i) {
-      glyph_list.appendChild(this.divs[indexes[i]]);
+      glyphList.appendChild(this.divs[indexes[i]]);
     }
   }
 }
 
-async function onLabelMetricSelection(ev, sampler) {
-  const outputImg = document.getElementById("output-img");
-  outputImg.src = "/output?metric=" + ev.target.value;
-  sampler.update();
+function initImageFlipButtons(imageUpdater) {
+  document.getElementById("next-img").onclick = () => imageUpdater.next();
+  document.getElementById("prev-img").onclick = () => imageUpdater.prev();
 }
 
-function initLabelMetrics(label_metrics, sampler) {
+function initLabelMetrics(labelMetrics, glyphList, sampler, outputImage) {
   const label_metrics_elem = document.getElementById("label-metric-selection");
-  for (const label_metric of label_metrics) {
+  for (const label_metric of labelMetrics) {
     const option = document.createElement("option");
     option.value = label_metric;
     option.innerHTML = label_metric;
@@ -116,37 +244,50 @@ function initLabelMetrics(label_metrics, sampler) {
   }
 
   label_metrics_elem.onchange = (ev) => {
-    onLabelMetricSelection(ev, sampler);
+    outputImage.updateMetric(ev.target.value);
+    sampler.updateMetric(ev.target.value);
+    glyphList.updateMetric(ev.target.value);
   };
   label_metrics_elem.dispatchEvent(new Event("change"));
 }
 
 async function init() {
-  const img = document.getElementById("input-img");
-
-  let sample_size_promise = fetch("/sample_size").then((response) =>
+  let sampleSizePromise = fetch("/sample_size").then((response) =>
     response.json(),
   );
-  let num_glyphs_promise = fetch("/glyphs").then((response) => response.json());
-  let label_metrics_promise = fetch("/label_metrics").then((response) =>
+  let numGlyphsPromise = fetch("/glyphs").then((response) => response.json());
+  let labelMetricsPromise = fetch("/label_metrics").then((response) =>
     response.json(),
   );
 
-  let [sample_size, glyphs_response, label_metrics] = await Promise.all([
-    sample_size_promise,
-    num_glyphs_promise,
-    label_metrics_promise,
+  let [sampleSize, glyphsResponse, labelMetrics] = await Promise.all([
+    sampleSizePromise,
+    numGlyphsPromise,
+    labelMetricsPromise,
   ]);
 
-  let glyph_list = new GlyphList(glyphs_response.num_glyphs);
+  let glyphList = new GlyphList(glyphsResponse.num_glyphs, labelMetrics[0]);
+
+  const fullImageContainer = document.getElementById("full-img-comp");
+  let inputImage = new InputImage(fullImageContainer);
+  let outputImage = new OutputImage(fullImageContainer, labelMetrics[0]);
 
   const sampler = new Sampler(
-    img,
-    glyph_list,
-    sample_size.width,
-    sample_size.height,
+    inputImage.img,
+    glyphList,
+    sampleSize.width,
+    sampleSize.height,
+    labelMetrics[0],
   );
-  initLabelMetrics(label_metrics, sampler);
+  const imageUpdater = new ImageUpdater(
+    inputImage,
+    outputImage,
+    sampler,
+    glyphList,
+  );
+
+  initImageFlipButtons(imageUpdater);
+  initLabelMetrics(labelMetrics, glyphList, sampler, outputImage);
 }
 
 window.addEventListener("DOMContentLoaded", function () {

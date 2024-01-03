@@ -1,10 +1,10 @@
-import math
 import numpy
 import torch
 import torchvision.transforms.functional as transforms
 
 from PIL import Image
 from typing import Tuple
+from pathlib import Path
 from torch.nn.functional import conv2d
 
 
@@ -47,41 +47,22 @@ def extract_w_h_samples(
     return samples
 
 
-def sample_to_sample_for_comparison(x, y, sample, img, img_for_comparison):
-    img_for_comparison_x = int(img_for_comparison.shape[1] / img.shape[1] * x)
-    img_for_comparison_y = int(img_for_comparison.shape[0] / img.shape[0] * y)
-    img_for_comparison_width = int(
-        img_for_comparison.shape[1] / img.shape[1] * sample.shape[1]
-    )
-    img_for_comparison_height = int(
-        img_for_comparison.shape[0] / img.shape[0] * sample.shape[0]
-    )
-
-    return img_for_comparison[
-        img_for_comparison_y : img_for_comparison_y + img_for_comparison_height,
-        img_for_comparison_x : img_for_comparison_x + img_for_comparison_width,
-    ]
-
-
 def get_samples_and_labels_for_img(
     sample_width: int,
     sample_height: int,
     img: torch.Tensor,
-    img_for_comparison: torch.Tensor,
     glyph_cache: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Extracts samples + labels for the given img/img_for_comparison pair
     """
+    assert img.dtype == torch.uint8
+
     data = extract_w_h_samples(sample_width, sample_height, img)
 
-    num_y_samples, num_x_samples = num_samples_for_img(img, sample_width, sample_height)
+    _, h, w = glyph_cache.shape
 
-    img_for_comp_sample_height = int(img_for_comparison.shape[0] / num_y_samples)
-    img_for_comp_sample_width = int(img_for_comparison.shape[1] / num_x_samples)
-    data_for_comparison = extract_w_h_samples(
-        img_for_comp_sample_width, img_for_comp_sample_height, img_for_comparison
-    )
+    data_for_comparison = transforms.resize(data, [h, w])
 
     assert (
         data.shape[0] == data_for_comparison.shape[0]
@@ -89,7 +70,7 @@ def get_samples_and_labels_for_img(
 
     labels = get_labels_for_samples(data_for_comparison, glyph_cache)
 
-    return data, labels
+    return data / 255.0, labels
 
 
 def blur_glyph_cache(glyph_cache: torch.Tensor) -> torch.Tensor:
@@ -240,31 +221,49 @@ def get_labels_for_samples(
     return labels
 
 
-class ImgSampler:
-    def __init__(self, w, h, glyph_cache, img_path, device="cpu"):
-        self.sample_width = w
-        self.sample_height = h
-        img_pil = Image.open(img_path).convert(mode="L")
-        self.img = torch.tensor(numpy.array(img_pil), device=device) / 255.0
+class NestedDirImageLoader:
+    def __init__(
+        self,
+        image_dir,
+        sample_width: int,
+        sample_height: int,
+        glyph_cache: torch.Tensor,
+        device="cpu",
+    ):
+        image_dir = Path(image_dir)
+        self.images = list(image_dir.glob("**/*.jpg"))
+        self.sample_width = sample_width
+        self.sample_height = sample_height
+        self.blurred_glyph_cache = blur_glyph_cache(glyph_cache)
+        self.device = device
 
-        _, glyph_height, glyph_width = glyph_cache.shape
-        img_for_comparison = img_pil.resize(
-            (
-                int(math.ceil(self.img.shape[1] / w * glyph_width)),
-                int(math.ceil(self.img.shape[0] / h * glyph_height)),
-            )
-        )
-        self.img_for_comparison = torch.tensor(
-            numpy.array(img_for_comparison), dtype=torch.uint8, device=device
-        )
+    def num_images(self):
+        return len(self.images)
 
-        self.blurred_glyph_cache = blur_glyph_cache(glyph_cache).to(device)
+    def get_sample(self, i):
+        img = Image.open(self.images[i]).convert(mode="L")
 
-    def get_samples(self):
-        return get_samples_and_labels_for_img(
+        img = torch.tensor(numpy.array(img), device=self.device)
+        ret = get_samples_and_labels_for_img(
             self.sample_width,
             self.sample_height,
-            self.img,
-            self.img_for_comparison,
+            img,
             self.blurred_glyph_cache,
         )
+
+        return ret
+
+    def get_samples(self, n):
+        assert n > 0
+        sample_ids = torch.randint(0, len(self.images), (n,))
+
+        datas = []
+        labels = []
+
+        for i in sample_ids:
+            # (n_1, h, w), (n_1,s)
+            data, sample_labels = self.get_sample(i)
+            datas.append(data)
+            labels.append(sample_labels)
+
+        return torch.cat(datas), torch.cat(labels)

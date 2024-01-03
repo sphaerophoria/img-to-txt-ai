@@ -6,13 +6,18 @@
     <title>Label visualizer</title>
   </head>
   <body>
-    <div id="full-img-comp">
-      <!-- Wrap input image in a div to inject sample selector in javascript -->
-      <div>
-        <img id="input-img" src="/input" />
+    <template id="full-img-template">
+      <div class="full-img-container">
+        <img class="full-img" />
       </div>
-      <img id="output-img" src="/output" />
+    </template>
+
+    <div id="full-img-comp">
+      <!-- Javascript populated with full-img-template -->
     </div>
+
+    <button id="prev-img">Prev</button>
+    <button id="next-img">Next</button>
 
     <h4>Labeling metric</h4>
     <select id="label-metric-selection"></select>
