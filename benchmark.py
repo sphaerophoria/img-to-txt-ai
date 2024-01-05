@@ -4,11 +4,13 @@ from lib.img_to_text import generate_glyph_cache
 from lib.img_sampler import (
     NestedDirImageLoader,
 )
-from lib.network import Network
+from lib.load_network import (
+    load_model_params,
+    load_network_from_model_params_and_weights,
+)
 
 from argparse import ArgumentParser
 
-import json
 import torch
 
 
@@ -22,8 +24,7 @@ def parse_args():
 
 
 def main(validation_data_path, model_params_path, weights_path, device):
-    with open(model_params_path) as f:
-        model_params = json.load(f)
+    model_params = load_model_params(model_params_path)
 
     sample_width = model_params["sample_width"]
     sample_height = model_params["sample_height"]
@@ -33,10 +34,7 @@ def main(validation_data_path, model_params_path, weights_path, device):
     sampler = NestedDirImageLoader(
         validation_data_path, sample_width, sample_height, glyph_cache, device=device
     )
-    net = Network(sample_width * sample_height, len(model_params["char_map"])).to(
-        device
-    )
-    net.load_state_dict(torch.load(weights_path))
+    net = load_network_from_model_params_and_weights(model_params, weights_path, device)
 
     matched = 0
     total = 0

@@ -24,10 +24,45 @@ import torch
 import numpy
 import urllib.parse
 
+from lib.load_network import (
+    load_model_params,
+    load_network_from_model_params_and_weights,
+)
+
+NETWORK_OUTPUT_LABEL = "network_output"
+
 
 def serve_numpy_as_png(img, wfile):
     img = Image.fromarray(img).convert(mode="L")
     img.save(wfile, format="png")
+
+
+def get_scores_from_network(samples, net):
+    n, h, w = samples.shape
+    samples = samples.reshape(n, h * w) / 255.0
+
+    scores = net.forward(samples)
+    return scores
+
+
+def get_labels_from_network(samples, net):
+    scores = get_scores_from_network(samples, net)
+    labels = scores.max(dim=1)[1]
+
+    return labels
+
+
+def get_labels_from_scorer(samples, blurred_glyph_cache, scoring_fn):
+    samples_for_comparison = transforms.resize(
+        samples,
+        [blurred_glyph_cache.shape[1], blurred_glyph_cache.shape[2]],
+    )
+    labels = get_labels_for_samples(
+        samples_for_comparison,
+        blurred_glyph_cache,
+        scoring_fn=scoring_fn,
+    )
+    return labels
 
 
 def path_to_mimetype(path):
@@ -62,6 +97,7 @@ class VisualizerServer(HTTPServer):
         img_sampler: NestedDirImageLoader,
         glyph_cache,
         score_metrics,
+        net,
         *args,
         **kwargs
     ):
@@ -69,6 +105,7 @@ class VisualizerServer(HTTPServer):
         self.img_sampler = img_sampler
         self.glyph_cache = glyph_cache
         self.score_metrics = score_metrics
+        self.net = net
 
 
 class VisualizerRequestHandler(BaseHTTPRequestHandler):
@@ -97,7 +134,11 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
 
     def _get_label_metrics(self):
         self._set_response_headers("application/json")
-        options = json.dumps(list(self.server.score_metrics.keys()))
+        options = []
+        if self.server.net is not None:
+            options.append(NETWORK_OUTPUT_LABEL)
+        options += list(self.server.score_metrics.keys())
+        options = json.dumps(options)
         self.wfile.write(options.encode())
 
     def _get_image_input(self):
@@ -132,15 +173,7 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
             img,
         )
 
-        samples_for_comparison = transforms.resize(
-            samples,
-            [self.server.glyph_cache.shape[1], self.server.glyph_cache.shape[2]],
-        )
-        labels = get_labels_for_samples(
-            samples_for_comparison,
-            self.server.img_sampler.blurred_glyph_cache,
-            scoring_fn=self.server.score_metrics[metric],
-        )
+        labels = self._get_labels_for_samples(samples, metric)
         renderer = TextRenderer(self.server.glyph_cache)
         img = renderer.render(labels, num_x_samples)
         img = Image.fromarray(img.cpu().numpy())
@@ -167,16 +200,8 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
             self.path, self.server.img_sampler, self.server.glyph_cache.device
         )
 
-        print(sample.shape)
-        sample = transforms.resize(
-            sample.unsqueeze(0),
-            [self.server.glyph_cache.shape[1], self.server.glyph_cache.shape[2]],
-        )
-        label = get_labels_for_samples(
-            sample,
-            self.server.img_sampler.blurred_glyph_cache,
-            self.server.score_metrics[metric],
-        )
+        sample = sample.unsqueeze(0)
+        label = self._get_labels_for_samples(sample, metric)
         img = self.server.glyph_cache[label[0]]
 
         self._set_response_headers("image/png")
@@ -186,17 +211,37 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
         sample, _, _, metric = query_params_to_sample(
             self.path, self.server.img_sampler, self.server.glyph_cache.device
         )
-        sample = transforms.resize(
-            sample.unsqueeze(0),
-            [self.server.glyph_cache.shape[1], self.server.glyph_cache.shape[2]],
-        )
-        scores = self.server.score_metrics[metric](
-            sample,
-            self.server.img_sampler.blurred_glyph_cache,
-        )
-        scores = scores.cpu()[0].tolist()
+        sample = sample.unsqueeze(0)
+
+        if metric == NETWORK_OUTPUT_LABEL:
+            scores = get_scores_from_network(sample, self.server.net)
+            scores *= -1
+            scores = scores.cpu()[0].tolist()
+        else:
+            sample = transforms.resize(
+                sample,
+                [self.server.glyph_cache.shape[1], self.server.glyph_cache.shape[2]],
+            )
+            scores = self.server.score_metrics[metric](
+                sample,
+                self.server.img_sampler.blurred_glyph_cache,
+            )
+
+            scores = scores.cpu()[0].tolist()
+
         self._set_response_headers("application/json")
         self.wfile.write(json.dumps(scores).encode())
+
+    def _get_labels_for_samples(self, samples, metric):
+        if metric == NETWORK_OUTPUT_LABEL:
+            labels = get_labels_from_network(samples, self.server.net)
+        else:
+            labels = get_labels_from_scorer(
+                samples,
+                self.server.img_sampler.blurred_glyph_cache,
+                self.server.score_metrics[metric],
+            )
+        return labels
 
     def _serve_file(self):
         file_path = "res" + self.path
@@ -246,18 +291,39 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
 
 def parse_args():
     parser = ArgumentParser()
+    parser.add_argument("--network-params", dest="network_params_path", default=None)
+    parser.add_argument("--network-weights", default=None)
+
     parser.add_argument("--data-path", required=True)
     parser.add_argument("--sample-width", type=int, required=True)
     parser.add_argument("--device", type=str, default="cpu")
-    return parser.parse_args()
+
+    parsed_args = parser.parse_args()
+
+    network_params_provided = parsed_args.network_params_path is None
+    network_weights_provided = parsed_args.network_weights is None
+    if network_weights_provided != network_params_provided:
+        raise RuntimeError(
+            "--network-params and --network-weights are both required if one is provided"
+        )
+
+    return parsed_args
 
 
-def main(data_path, sample_width, device):
+def main(data_path, sample_width, device, network_params_path, network_weights):
     _, glyph_cache = generate_glyph_cache(device=device)
     sample_height = int(sample_width * glyph_cache.shape[1] / glyph_cache.shape[2])
     sampler = NestedDirImageLoader(
         data_path, sample_width, sample_height, glyph_cache, device
     )
+
+    net = None
+    if network_params_path is not None and network_weights is not None:
+        network_params = load_model_params(network_params_path)
+        net = load_network_from_model_params_and_weights(
+            network_params, network_weights, device
+        )
+        pass
 
     score_metrics = {
         "training_labels": compute_glyph_diff_with_brightness_scores_for_samples,
@@ -269,6 +335,7 @@ def main(data_path, sample_width, device):
         sampler,
         glyph_cache,
         score_metrics,
+        net,
         ("localhost", 9999),
         RequestHandlerClass=VisualizerRequestHandler,
     )
