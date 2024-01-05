@@ -18,8 +18,10 @@ from pathlib import Path
 from PIL import Image
 
 import torchvision.transforms.functional as transforms
+import tempfile
 
 import json
+import subprocess
 import torch
 import numpy
 import urllib.parse
@@ -74,6 +76,39 @@ def path_to_mimetype(path):
     return suffixes[Path(path).suffix]
 
 
+def open_image_filtered(path):
+    with tempfile.TemporaryDirectory() as d:
+        output = f"{d}/output.png"
+        # Local contrast enhancement. Overall we care more that details are
+        # preserved than brightness is perfect. Boost differences while still
+        # attempting to preserve some semblance of a reasonable image
+        subprocess.run(
+            ["magick", str(path), "-clahe", "20x20%+128+2", output], check=True
+        )
+
+        img = Image.open(output).convert(mode="L")
+        img = torch.tensor(numpy.array(img)).to(torch.float32)
+
+        # Looking at other image network normalization params... normalization
+        # happens with ~115 mean and ~55 std
+        #
+        # If we look at our glyph brightness distribution it skews very dark.
+        # Around a 50 mean and 25 std
+        #
+        # Darken the whole image to improve the chances that shapes will match
+        # cleanly. Brighten above the mean to preserve very bright areas.
+        standard_mean = 114
+        new_mean = 75
+        new_img = img - standard_mean + new_mean
+
+        idx = new_img > new_mean
+        new_img[idx] = (new_img[idx] - new_mean) * 1.5 + new_mean
+        new_img.clamp_(0.0, 255.0)
+
+        new_img = new_img.to(torch.uint8).squeeze()
+        return Image.fromarray(new_img.cpu().numpy())
+
+
 def query_params_to_sample(url, img_sampler, device):
     parsed_path = urllib.parse.urlparse(url)
     query_params = urllib.parse.parse_qs(parsed_path.query)
@@ -85,7 +120,7 @@ def query_params_to_sample(url, img_sampler, device):
         metric = metric[0]
     sample_height = img_sampler.sample_height
     sample_width = img_sampler.sample_width
-    img = Image.open(img_sampler.images[image_id]).convert(mode="L")
+    img = open_image_filtered(img_sampler.images[image_id]).convert(mode="L")
     img = torch.tensor(numpy.array(img), device=device)
     img = img[y : y + sample_height, x : x + sample_width]
     return img, x, y, metric
@@ -99,7 +134,7 @@ class VisualizerServer(HTTPServer):
         score_metrics,
         net,
         *args,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.img_sampler = img_sampler
@@ -159,7 +194,7 @@ class VisualizerRequestHandler(BaseHTTPRequestHandler):
 
         img_path = self.server.img_sampler.images[id]
         img = torch.tensor(
-            numpy.array(Image.open(img_path).convert(mode="L")),
+            numpy.array(open_image_filtered(img_path).convert(mode="L")),
             device=self.server.glyph_cache.device,
         )
         _, num_x_samples = num_samples_for_img(

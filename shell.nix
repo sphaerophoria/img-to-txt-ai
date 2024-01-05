@@ -9,6 +9,7 @@ pkgs.mkShell {
     python3Packages.freetype-py
     python3Packages.pillow
     nodePackages.pyright
+    imagemagick
     ruff
     black
     python3
