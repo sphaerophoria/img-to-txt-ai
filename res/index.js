@@ -79,8 +79,6 @@ class Sampler {
     this.div.classList.add("sample_view");
     this.div.style.position = "absolute";
 
-    this.width_ratio = target.width / target.naturalWidth;
-    this.height_ratio = target.height / target.naturalHeight;
     this.id = 0;
     this.metric = initialMetric;
 
